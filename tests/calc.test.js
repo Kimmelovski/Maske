@@ -61,3 +61,23 @@ test('neste bestilling og frekvensforslag', () => {
   assert.equal(f.recommended, 21); // 100×3/21×14 = 200 < 250, ×21 = 300 ≥ 250
   assert.equal(f.why, 'freeShipping');
 });
+
+test('engangskjøp fordeles over hele ordrehistorikken, utstyr holdes utenfor', () => {
+  const pedal = { sku: '2', name: 'Pedalbøtte', unit: 'stk', active: true };
+  const s = base({
+    items: { 1: item, 2: pedal },
+    orders: [
+      order('a', '2026-09-01', 3),
+      { id: 'b', date: '2026-09-22', receivedDate: null, lines: [{ sku: '2', name: 'Pedalbøtte', price: 800, qty: 1, sum: 800 }] },
+      order('c', '2026-10-27', 3),
+    ],
+  });
+  const st = itemStats(s, '2', '2026-10-29');
+  assert.equal(st.source, 'antatt');
+  assert.ok(Math.abs(st.rate - 1 / 58) < 1e-9); // 01.09–29.10 = 58 dager, ikke 21
+  const withPedal = frequencyOptions(s, '2026-10-29').daily;
+  s.items[2].consumable = false;
+  const without = frequencyOptions(s, '2026-10-29').daily;
+  assert.ok(without < withPedal);
+  assert.equal(buildOrderPlan(s, '2026-10-29').rows.some((r) => r.item.sku === '2'), false);
+});

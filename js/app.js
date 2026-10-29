@@ -9,6 +9,7 @@ import {
   monthlySpend,
   priceHistory,
   lastPrice,
+  isPlanned,
 } from './calc.js';
 import { barChart, lineChart } from './charts.js';
 import { esc, fmtDate, fmtKr, fmtNum, todayISO, daysBetween, monthLabel, parseInput, addDays, round2 } from './util.js';
@@ -176,7 +177,7 @@ const views = {
 
   telling() {
     const items = Object.values(state.items)
-      .filter((i) => i.active !== false)
+      .filter(isPlanned)
       .sort((a, b) => a.name.localeCompare(b.name, 'nb'));
     const count = state.counts.find((c) => c.date === ui.countDate);
     const entries = count?.entries || {};
@@ -354,7 +355,7 @@ const views = {
   },
 
   varer() {
-    const items = Object.values(state.items).sort((a, b) => (b.active !== false) - (a.active !== false) || a.name.localeCompare(b.name, 'nb'));
+    const items = Object.values(state.items).sort((a, b) => isPlanned(b) - isPlanned(a) || a.name.localeCompare(b.name, 'nb'));
     return `
       <h1>Varer</h1>
       <input class="search" type="search" placeholder="Søk i varer" data-input="filter">
@@ -365,7 +366,7 @@ const views = {
             const p = lastPrice(state, it.sku);
             return `<li data-name="${esc((it.name + ' ' + it.sku).toLowerCase())}" class="${it.active === false ? 'inactive' : ''}"><button class="link" data-act="go" data-to="#/vare/${esc(it.sku)}"><b>${esc(it.name)}</b><span class="muted small">${esc(it.sku)} · ${
               st.effRate != null ? `${fmtNum(perWeek(st.effRate), 1)} ${esc(unitOf(it))}/uke` : 'ukjent forbruk'
-            }${st.boosted ? ' · <span class="danger">går tomt</span>' : ''}</span></button><span class="num">${p != null ? money(p, 2) : ''}</span></li>`;
+            }${it.consumable === false ? ' · utstyr' : ''}${st.boosted ? ' · <span class="danger">går tomt</span>' : ''}</span></button><span class="num">${p != null ? money(p, 2) : ''}</span></li>`;
           })
           .join('')}</ul>
       </div>
@@ -420,7 +421,9 @@ const views = {
         </div>
         ${f('minQty', 'Bestill alltid minst', 'text', 'inputmode="decimal"')}
         ${f('note', 'Notat')}
-        <label class="check"><input type="checkbox" data-chg="itemActive" data-sku="${esc(sku)}" ${it.active !== false ? 'checked' : ''}> Aktiv (tas med i telling og forslag)</label>
+        <label class="check"><input type="checkbox" data-chg="itemFlag" data-flag="consumable" data-sku="${esc(sku)}" ${it.consumable !== false ? 'checked' : ''}> Forbruksvare (brukes opp og bestilles jevnlig)</label>
+        <p class="muted small">Ta bort haken for utstyr og engangskjøp, f.eks. pedalbøtte eller musematte. De holdes da utenfor telling og forslag, men vises fortsatt i statistikken.</p>
+        <label class="check"><input type="checkbox" data-chg="itemFlag" data-flag="active" data-sku="${esc(sku)}" ${it.active !== false ? 'checked' : ''}> Aktiv (fjern haken hvis dere har sluttet å kjøpe varen)</label>
       </div>
       ${
         st.intervals.length
@@ -539,7 +542,11 @@ const actions = {
     state.orders = state.orders.filter((o) => o.id !== id);
     state.orders.push(order);
     ensureItemsFromOrder(order);
-    for (const l of order.lines) if (state.items[l.sku] && !state.items[l.sku].name) state.items[l.sku].name = l.name;
+    // Fyll inn navn som manglet (f.eks. fra et avkuttet skjermbilde).
+    for (const l of order.lines) {
+      const it = state.items[l.sku];
+      if (it && (!it.name || /navn mangler/.test(it.name))) it.name = l.name;
+    }
     state.draft = {};
     ui.preview = null;
     ui.pasteText = '';
@@ -612,7 +619,7 @@ const changes = {
     if (!Object.keys(c.entries).length) state.counts = state.counts.filter((x) => x !== c);
     // Ingen full omtegning her, så fokus blir stående i neste felt.
     row.classList.toggle('done', c.entries[sku] != null);
-    const items = Object.values(state.items).filter((i) => i.active !== false);
+    const items = Object.values(state.items).filter(isPlanned);
     const done = items.filter((i) => c.entries[i.sku] != null).length;
     const p = document.getElementById('countProgress');
     if (p) p.textContent = `${done} av ${items.length} varer talt`;
@@ -644,8 +651,8 @@ const changes = {
     }
     commit();
   },
-  itemActive(el) {
-    state.items[el.dataset.sku].active = el.checked;
+  itemFlag(el) {
+    state.items[el.dataset.sku][el.dataset.flag] = el.checked;
     commit();
   },
   setting(el) {

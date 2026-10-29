@@ -68,7 +68,9 @@ export function mergeState(current, incoming) {
   const inc = normalize(incoming);
   const out = normalize(JSON.parse(JSON.stringify(current)));
   for (const [sku, item] of Object.entries(inc.items)) {
-    out.items[sku] = out.items[sku] ? { ...item, ...out.items[sku] } : item;
+    const cur = out.items[sku];
+    out.items[sku] = cur ? { ...item, ...cur } : item;
+    if (cur && /navn mangler/.test(cur.name) && item.name && !/navn mangler/.test(item.name)) out.items[sku].name = item.name;
   }
   for (const o of inc.orders) {
     const i = out.orders.findIndex((x) => x.id === o.id);

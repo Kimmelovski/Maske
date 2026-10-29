@@ -18,6 +18,9 @@ export const DEFAULT_SETTINGS = {
   lastBackup: null,
 };
 
+// Varer som tas med i telling og forslag: aktive forbruksvarer (ikke utstyr/engangskjøp).
+export const isPlanned = (item) => item.active !== false && item.consumable !== false;
+
 export function arrivalDate(order, settings) {
   return order.receivedDate || addDays(order.date, settings.leadDays);
 }
@@ -76,8 +79,11 @@ export function itemStats(state, sku, today = todayISO()) {
       }
     }
     if (rate == null && orders.length >= 1) {
-      // Én bestilling: anta at den var ment å vare én bestillingsperiode.
-      rate = orders.reduce((a, o) => a + o.qty, 0) / orders.length / s.intervalDays;
+      // Bare én bestilling: fordel mengden over hele perioden vi har ordrer for
+      // (minst én bestillingsperiode). Da blir sjeldne kjøp ikke regnet som ukentlig forbruk.
+      const firstAny = state.orders.reduce((m, o) => (o.date < m ? o.date : m), orders[0].orderDate);
+      const span = Math.max(s.intervalDays, daysBetween(firstAny, today));
+      rate = orders.reduce((a, o) => a + o.qty, 0) / span;
       source = 'antatt';
     }
   }
@@ -160,7 +166,7 @@ export function recommendQty(stats, item, settings, intervalDays = settings.inte
 export function buildOrderPlan(state, today = todayISO(), intervalDays = state.settings.intervalDays) {
   const rows = [];
   for (const item of Object.values(state.items)) {
-    if (item.active === false) continue;
+    if (!isPlanned(item)) continue;
     const stats = itemStats(state, item.sku, today);
     const rec = recommendQty(stats, item, state.settings, intervalDays);
     const override = state.draft?.[item.sku];
@@ -178,7 +184,7 @@ export function nextOrderSuggestion(state, today = todayISO()) {
   let first = null;
   let urgent = [];
   for (const item of Object.values(state.items)) {
-    if (item.active === false) continue;
+    if (!isPlanned(item)) continue;
     const st = itemStats(state, item.sku, today);
     if (!st.orderBy) continue;
     if (!first || st.orderBy < first.date) first = { date: st.orderBy, item };
@@ -195,7 +201,7 @@ export function frequencyOptions(state, today = todayISO()) {
   let daily = 0;
   let known = 0;
   for (const item of Object.values(state.items)) {
-    if (item.active === false) continue;
+    if (!isPlanned(item)) continue;
     const st = itemStats(state, item.sku, today);
     const p = lastPrice(state, item.sku);
     if (st.effRate && p != null) {
