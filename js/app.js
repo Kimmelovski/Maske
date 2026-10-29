@@ -307,8 +307,13 @@ const views = {
           <p><b>Ordre ${esc(p.id || '?')}</b> · ${fmtDate(p.date)} · ${p.lines.length} varelinjer</p>
           <table class="tbl"><tr><th>Vare</th><th class="num">Pris</th><th class="num">Ant.</th></tr>
           ${p.lines.map((l) => `<tr><td>${esc(l.name)}<div class="muted small">${esc(l.sku)}</div></td><td class="num">${fmtNum(l.price, 2)}</td><td class="num">${fmtNum(l.qty)}</td></tr>`).join('')}
-          <tr><td><b>Sum eks. mva</b></td><td class="num" colspan="2"><b>${fmtNum(p.linesSum, 2)}</b></td></tr>
+          <tr><td>Sum eks. mva</td><td class="num" colspan="2">${fmtNum(p.linesSum, 2)}</td></tr>
+          <tr><td>Mva${p.vatEstimated ? ' (regnet ut, 25 %)' : ''}</td><td class="num" colspan="2">${fmtNum(p.linesVat, 2)}</td></tr>
+          <tr><td><b>Sum inkl. mva</b></td><td class="num" colspan="2"><b>${fmtNum(p.linesSumInc, 2)}</b></td></tr>
           ${p.total != null ? `<tr><td>Totalt inkl. mva (fra siden)</td><td class="num" colspan="2">${fmtNum(p.total, 2)}</td></tr>` : ''}
+          </table>
+          <p class="muted small">Prisene per vare er eks. mva, slik Maske viser dem. Mva er lagret på hver linje. Vil du se alle beløp i appen inkl. mva, slår du det på under ⚙ Innstillinger.</p>
+          <table class="tbl">
           </table>
           ${p.warnings.map((w) => `<p class="warn small">⚠ ${esc(w)}</p>`).join('')}
           ${p.ok ? '<p class="ok small">✓ Summen stemmer med ordretotalen.</p>' : ''}

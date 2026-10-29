@@ -28,6 +28,20 @@ function matchLineAt(tokens, j) {
   return { price, qty, sum, vat, sumInc };
 }
 
+// Reserve når mva-kolonnene ikke er med i teksten (f.eks. hvis tabellen er kuttet):
+// pris, antall og sum. Mva regnes da ut med 25 %.
+function matchShortAt(tokens, j) {
+  const [p, q, s, next] = tokens.slice(j, j + 4);
+  if (!(isMoney(p) && QTY.test(q ?? '') && isMoney(s))) return null;
+  if (next && isMoney(next)) return null; // da er det en vanlig linje med mva
+  const price = parseMoney(p);
+  const qty = parseMoney(q);
+  const sum = parseMoney(s);
+  if (Math.abs(price * qty - sum) > Math.max(0.05, sum * 0.005)) return null;
+  const vat = round2(sum * 0.25);
+  return { price, qty, sum, vat, sumInc: round2(sum + vat), vatEstimated: true, width: 3 };
+}
+
 export function parseMaskeOrder(text) {
   const clean = String(text || '').replace(/ /g, ' ');
   const flat = clean.replace(/\s+/g, ' ');
@@ -51,13 +65,14 @@ export function parseMaskeOrder(text) {
     // Ikke tolk referansenummer o.l. som varenummer.
     const prev = (tokens[i - 1] || '').toLowerCase();
     if (prev.startsWith('referanse') || prev.startsWith('filial')) continue;
-    for (let j = i + 2; j < Math.min(tokens.length - 4, i + 40); j++) {
-      const hit = matchLineAt(tokens, j);
+    for (let j = i + 2; j < Math.min(tokens.length - 2, i + 40); j++) {
+      const hit = matchLineAt(tokens, j) || matchShortAt(tokens, j);
       if (hit) {
         const name = tokens.slice(i + 1, j).join(' ').trim();
         if (name && !SKU.test(name)) {
-          lines.push({ sku: tokens[i], name, ...hit });
-          i = j + 4;
+          const { width = 5, ...line } = hit;
+          lines.push({ sku: tokens[i], name, ...line });
+          i = j + width - 1;
         }
         break;
       }
@@ -68,17 +83,21 @@ export function parseMaskeOrder(text) {
 
   const linesSum = round2(lines.reduce((a, l) => a + l.sum, 0));
   const linesSumInc = round2(lines.reduce((a, l) => a + l.sumInc, 0));
+  const linesVat = round2(lines.reduce((a, l) => a + l.vat, 0));
+  const vatEstimated = lines.some((l) => l.vatEstimated);
   const warnings = [];
   if (!header.id) warnings.push('Fant ikke ordrenummer.');
   if (!header.date) warnings.push('Fant ikke ordredato.');
   if (!lines.length) warnings.push('Fant ingen varelinjer.');
   if (header.total != null && lines.length) {
     const expected = round2(header.total - (header.freight || 0));
-    if (Math.abs(expected - linesSumInc) > 0.1) {
+    // Utregnet mva kan avvike noen øre per linje fra Maskes avrunding.
+    const tol = vatEstimated ? Math.max(0.1, lines.length * 0.03) : 0.1;
+    if (Math.abs(expected - linesSumInc) > tol) {
       warnings.push(
         `Summen av varelinjene (${linesSumInc.toFixed(2)} inkl. mva) stemmer ikke med totalen (${expected.toFixed(2)}). Mangler det linjer?`
       );
     }
   }
-  return { ...header, lines, linesSum, linesSumInc, warnings, ok: lines.length > 0 && warnings.length === 0 };
+  return { ...header, lines, linesSum, linesVat, linesSumInc, vatEstimated, warnings, ok: lines.length > 0 && warnings.length === 0 };
 }

@@ -36,3 +36,20 @@ test('tom tekst gir advarsler, ikke feil', () => {
   assert.equal(r.lines.length, 0);
   assert.ok(r.warnings.length >= 2);
 });
+
+test('tåler tekst uten mva-kolonner og regner ut mva', () => {
+  const short = tabText.replace(/^(\d{7} .+?\t[\d.,]+\t\d+\t[\d.,]+)\t[\d.,]+\t[\d.,]+$/gm, '$1');
+  const r = parseMaskeOrder(short);
+  assert.equal(r.lines.length, 10);
+  assert.equal(r.linesSum, 3546.37);
+  assert.ok(r.vatEstimated);
+  assert.ok(Math.abs(r.linesSumInc - 4433) < 0.3);
+  assert.deepEqual(r.warnings, []);
+});
+
+test('mva fra siden summeres', () => {
+  const r = parseMaskeOrder(tabText);
+  assert.equal(r.linesVat, 886.63);
+  assert.equal(r.linesSumInc, 4433);
+  assert.equal(r.vatEstimated, false);
+});
