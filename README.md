@@ -40,5 +40,5 @@ index.html, css/, js/
 
 - Kjør lokalt: `npm start` og åpne http://localhost:8080
 - Tester: `npm test`
-- Publisering: GitHub Actions publiserer til GitHub Pages ved push til `main`
-  (krever at *Settings → Pages → Source* er satt til **GitHub Actions**).
+- Publisering: GitHub Actions publiserer til GitHub Pages ved push til `main` eller standardgrenen
+  (krever at *Settings → Pages → Source* er satt til **GitHub Actions**). Kjører også fra standardgrenen så lenge `main` ikke finnes.

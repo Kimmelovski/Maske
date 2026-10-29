@@ -2,7 +2,7 @@ name: Publiser app
 
 on:
   push:
-    branches: [main]
+    branches: [main, ccr-6a522acd-4opoue]
   workflow_dispatch:
 
 permissions:
