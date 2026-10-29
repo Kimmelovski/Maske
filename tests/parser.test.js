@@ -53,3 +53,15 @@ test('mva fra siden summeres', () => {
   assert.equal(r.linesSumInc, 4433);
   assert.equal(r.vatEstimated, false);
 });
+
+test('ekte kopiert tekst fra Brave (ordre w.769660)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const r = parseMaskeOrder(readFileSync(new URL('./fixture-769660.txt', import.meta.url), 'utf8'));
+  assert.equal(r.id, 'w.769660');
+  assert.equal(r.date, '2025-09-09');
+  assert.equal(r.lines.length, 5);
+  assert.equal(r.linesSum, 2592.87);
+  assert.equal(r.linesVat, 648.24);
+  assert.equal(r.linesSumInc, 3241.11);
+  assert.ok(r.ok);
+});

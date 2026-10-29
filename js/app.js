@@ -343,6 +343,7 @@ const views = {
     const o = state.orders.find((x) => x.id === id);
     if (!o) return `<h1>Fant ikke ordren</h1>`;
     const sum = o.lines.reduce((a, l) => a + l.sum, 0);
+    const vat = o.lines.reduce((a, l) => a + (l.vat ?? l.sum * 0.25), 0);
     return `
       <button class="link" data-act="go" data-to="#/ordrer">← Ordrer</button>
       <h1>Ordre ${esc(o.id)}</h1>
@@ -354,7 +355,13 @@ const views = {
       <div class="card">
         <table class="tbl"><tr><th>Vare</th><th class="num">Pris</th><th class="num">Ant.</th><th class="num">Sum</th></tr>
         ${o.lines.map((l) => `<tr><td><button class="link" data-act="go" data-to="#/vare/${esc(l.sku)}">${esc(l.name)}</button></td><td class="num">${fmtNum(l.price * vatF(), 2)}</td><td class="num">${fmtNum(l.qty)}</td><td class="num">${fmtNum(l.sum * vatF(), 2)}</td></tr>`).join('')}
-        <tr><td colspan="3"><b>Sum ${vatLabel()}</b></td><td class="num"><b>${fmtNum(sum * vatF(), 2)}</b></td></tr></table>
+        </table>
+        <table class="tbl">
+          <tr><td>Sum eks. mva</td><td class="num">${fmtNum(sum, 2)}</td></tr>
+          <tr><td>Mva</td><td class="num">${fmtNum(vat, 2)}</td></tr>
+          <tr><td><b>Sum inkl. mva</b></td><td class="num"><b>${fmtNum(sum + vat, 2)}</b></td></tr>
+        </table>
+        <p class="muted small">Prisene i tabellen over er ${vatLabel()}.</p>
       </div>
       <button class="btn danger" data-act="deleteOrder" data-id="${esc(o.id)}">Slett ordre</button>`;
   },
