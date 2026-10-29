@@ -10,12 +10,17 @@ import {
   priceHistory,
   lastPrice,
   isPlanned,
+  priceChanges,
+  budgetStatus,
+  spendByCategory,
+  closedPeriodsBetween,
 } from './calc.js';
+import { CATEGORIES, guessCategory } from './categories.js';
 import { barChart, lineChart } from './charts.js';
 import { esc, fmtDate, fmtKr, fmtNum, todayISO, daysBetween, monthLabel, parseInput, addDays, round2 } from './util.js';
 
 let state = emptyState();
-const ui = { countDate: todayISO(), preview: null, pasteText: '', importMsg: '' };
+const ui = { countDate: todayISO(), stockoutDate: todayISO(), preview: null, pasteText: '', importMsg: '' };
 const $main = () => document.getElementById('main');
 
 // ---------- Hjelpere ----------
@@ -61,12 +66,47 @@ function sourceBadge(st) {
   return '';
 }
 
+function newItem(sku, name) {
+  return { sku, name, unit: 'stk', perUnit: null, subUnit: '', minQty: 0, active: true, note: '', category: guessCategory(name) };
+}
+
 function ensureItemsFromOrder(order) {
   for (const l of order.lines) {
-    if (!state.items[l.sku]) {
-      state.items[l.sku] = { sku: l.sku, name: l.name, unit: 'stk', perUnit: null, subUnit: '', minQty: 0, active: true, note: '' };
-    }
+    if (!state.items[l.sku]) state.items[l.sku] = newItem(l.sku, l.name);
   }
+}
+
+// Gir varer uten kategori en foreslått kategori (gjelder varer lagt inn før kategorier fantes).
+function migrateItems() {
+  for (const it of Object.values(state.items)) if (!it.category) it.category = guessCategory(it.name);
+}
+
+const catIndex = (c) => {
+  const i = CATEGORIES.indexOf(c || 'Annet');
+  return i < 0 ? CATEGORIES.length : i;
+};
+const byCategoryThenName = (a, b) => catIndex(a.category) - catIndex(b.category) || a.name.localeCompare(b.name, 'nb');
+
+// Legger inn kategorioverskrifter i en sortert liste.
+function withCategoryHeaders(items, rowFn, headerFn) {
+  let last = null;
+  return items
+    .map((it) => {
+      const cat = it.category || 'Annet';
+      const head = cat !== last ? headerFn(cat) : '';
+      last = cat;
+      return head + rowFn(it);
+    })
+    .join('');
+}
+
+function priceChangeList(changes) {
+  if (!changes.length) return '';
+  return `<ul class="list">${changes
+    .map(
+      (c) => `<li><button class="link" data-act="go" data-to="#/vare/${esc(c.sku)}">${esc(c.name)}<span class="muted small">${money(c.prev, 2)} (${fmtDate(c.prevDate)}) → ${money(c.now, 2)}</span></button><span class="num ${c.pct > 0 ? 'danger' : 'ok'}">${c.pct > 0 ? '▲ +' : '▼ '}${fmtNum(c.pct, 1)} %</span></li>`
+    )
+    .join('')}</ul>`;
 }
 
 // ---------- Visninger ----------
@@ -111,6 +151,37 @@ const views = {
     const noCounts = state.counts.length === 0;
     const backupDays = state.settings.lastBackup ? daysBetween(state.settings.lastBackup, today) : null;
 
+    const budget = budgetStatus(state);
+    const cats = spendByCategory(state, year);
+    const catMax = Math.max(1, ...cats.map((c) => c.sum));
+    const latest = [...state.orders].sort((a, b) => b.date.localeCompare(a.date))[0];
+    const changes = latest ? priceChanges(state, latest) : [];
+    const closedSoon = closedPeriodsBetween(today, addDays(today, 60), state.settings);
+
+    let budgetHtml = '';
+    if (budget) {
+      const over = budget.projected != null && budget.projected > budget.budget;
+      const bv = (x) => fmtKr(x);
+      budgetHtml = `
+        <div class="card">
+          <div class="label">Budsjett ${budget.year} (${budget.incVat ? 'inkl.' : 'eks.'} mva)</div>
+          <div class="big">${bv(budget.spent)} <span class="sub">av ${bv(budget.budget)}</span></div>
+          <div class="budgetbar" title="Brukt ${fmtNum(budget.pct, 0)} %">
+            <div class="fill ${budget.pct > budget.yearPct + 5 ? 'hot' : ''}" style="width:${Math.min(100, budget.pct)}%"></div>
+            <div class="mark" style="left:${budget.yearPct}%"></div>
+          </div>
+          <p class="small">${fmtNum(budget.pct, 0)} % brukt, og ${fmtNum(budget.yearPct, 0)} % av året har gått (streken). ${
+            budget.left >= 0 ? `${bv(budget.left)} igjen.` : `<b class="danger">${bv(-budget.left)} over budsjett.</b>`
+          }</p>
+          ${
+            budget.projected != null
+              ? `<p class="small ${over ? 'danger' : 'ok'}">Med samme tempo ender året på ca. ${bv(budget.projected)} – ${over ? `${bv(budget.projected - budget.budget)} over` : `${bv(budget.budget - budget.projected)} under`} budsjett.</p>`
+              : ''
+          }
+          <p class="muted small">Denne måneden: ${bv(budget.monthSpent)} av ${bv(budget.monthBudget)} (1/12 av året).</p>
+        </div>`;
+    }
+
     let nextHtml = '';
     if (next) {
       const d = daysBetween(today, next.date);
@@ -150,6 +221,16 @@ const views = {
       ${noCounts ? `<div class="card info"><b>Tips:</b> Tell lageret før neste bestilling. Da kan appen regne ut faktisk forbruk i stedet for å anslå det fra bestillingene. <button class="btn small" data-act="go" data-to="#/telling">Start telling</button></div>` : ''}
       ${backupDays == null || backupDays > 30 ? `<div class="card warnbox">Dataene ligger bare på denne telefonen. ${backupDays == null ? 'Du har ikke tatt sikkerhetskopi ennå.' : `Siste sikkerhetskopi er ${backupDays} dager gammel.`} <button class="btn small" data-act="backup">Ta sikkerhetskopi</button></div>` : ''}
       ${nextHtml}
+      ${closedSoon
+        .map((p) => `<div class="card info small">🏖 <b>${esc(p.label || 'Stengt')}</b> ${fmtDate(p.from)}–${fmtDate(p.to)}. Forslagene regner ikke med forbruk i den perioden.</div>`)
+        .join('')}
+      <button class="btn block" data-act="go" data-to="#/tomt">⚠ Noe gikk tomt? Registrer det</button>
+      ${budgetHtml}
+      ${
+        changes.length
+          ? `<div class="card"><div class="label">Prisendringer i siste ordre (${fmtDate(latest.date)})</div>${priceChangeList(changes)}<p class="muted small">Sammenlignet med forrige gang varen ble kjøpt. Grense: ${state.settings.priceAlertPct} %.</p></div>`
+          : ''
+      }
       <div class="tiles">
         <div class="tile"><div class="label">Brukt i ${year}</div><div class="val">${money(spentYear)}</div><div class="sub">${vatLabel()}</div></div>
         <div class="tile"><div class="label">Ordrer i ${year}</div><div class="val">${ordersYear.length}</div><div class="sub">snitt ${money(ordersYear.length ? spentYear / ordersYear.length : 0)}</div></div>
@@ -167,6 +248,16 @@ const views = {
         <table class="tbl"><tr><th>Rytme</th><th class="num">Ca. per ordre</th><th class="num">Ordrer</th></tr>${freqRows}</table>
         ${freq.known ? `<p class="muted small">Forbruk ca. ${money(freq.daily * 7)} per uke for ${freq.known} varer.</p>` : ''}
       </div>
+      ${
+        cats.length
+          ? `<div class="card"><div class="label">Kostnad per kategori i ${year} (${vatLabel()})</div>${cats
+              .map(
+                (c) => `<div class="catrow"><span class="cname2">${esc(c.category)}</span><span class="cbar"><i style="width:${(c.sum / catMax) * 100}%"></i></span><span class="num">${money(c.sum)}</span></div>`
+              )
+              .join('')}<p class="muted small">Kategori kan endres på hver vare.</p></div>`
+          : ''
+      }
+      ${!budget ? `<p class="muted small">Har dere budsjett for forbruksvarer? Legg det inn under <button class="link small" data-act="go" data-to="#/innstillinger">Innstillinger</button>, så følger appen med.</p>` : ''}
       <div class="card">
         <div class="label">Mest penger brukt på</div>
         <ul class="list">${top
@@ -176,15 +267,14 @@ const views = {
   },
 
   telling() {
-    const items = Object.values(state.items)
-      .filter(isPlanned)
-      .sort((a, b) => a.name.localeCompare(b.name, 'nb'));
+    const items = Object.values(state.items).filter(isPlanned).sort(byCategoryThenName);
     const count = state.counts.find((c) => c.date === ui.countDate);
     const entries = count?.entries || {};
     const done = items.filter((i) => entries[i.sku] != null).length;
     if (!items.length) return `<h1>Telling</h1><div class="card">Ingen varer ennå. Legg inn en ordre først.</div>`;
-    const rows = items
-      .map((it) => {
+    const rows = withCategoryHeaders(
+      items,
+      (it) => {
         const st = itemStats(state, it.sku);
         const prev = st.counts.filter((c) => c.date < ui.countDate).pop();
         const v = entries[it.sku];
@@ -205,8 +295,9 @@ const views = {
             </div>
             <div class="cinputs">${inputs}</div>
           </div>`;
-      })
-      .join('');
+      },
+      (cat) => `<div class="ghead">${esc(cat)}</div>`
+    );
     return `
       <h1>Telling</h1>
       <div class="card">
@@ -232,7 +323,8 @@ const views = {
         const badges = [];
         if (rec.reason === 'ikke-talt') badges.push('<span class="badge warn">tell først</span>');
         if (rec.reason === 'ingen-data') badges.push('<span class="badge muted">ingen data</span>');
-        if (st.boosted) badges.push('<span class="badge danger">har gått tomt</span>');
+        if (st.boosted) badges.push(`<span class="badge danger">har gått tomt, +${s.stockoutBoost} %</span>`);
+        else if (st.stockoutEvents) badges.push(`<span class="badge danger">gikk tomt ${st.stockoutEvents}×</span>`);
         const info = [];
         if (st.stockNow != null) info.push(`lager ca. ${qtyText(it, st.stockNow)}`);
         if (st.onTheWay) info.push(`på vei ${fmtNum(st.onTheWay)}`);
@@ -256,6 +348,10 @@ const views = {
       })
       .join('');
     const count = plan.rows.filter((r) => r.qty > 0).length;
+    const budget = budgetStatus(state);
+    const budgetHtml = budget
+      ? `<div class="small muted">Etter bestillingen: ${fmtNum(((budget.spent + plan.total * (budget.incVat ? 1.25 : 1)) / budget.budget) * 100, 0)} % av årsbudsjettet</div>`
+      : '';
     const fs = s.freeShippingMin;
     const fsHtml = fs
       ? `<div class="small ${plan.total >= fs ? 'ok' : 'warn'}">${plan.total >= fs ? '✓ Over grensen for fri frakt' : `${fmtKr(fs - plan.total)} under grensen for fri frakt (eks. mva)`}</div>`
@@ -265,11 +361,14 @@ const views = {
       <div class="card">
         <div class="label">Hvor lenge skal bestillingen vare?</div>
         <div class="chips">${chips}</div>
-        <p class="muted small">Forslaget dekker leveringstid (${s.leadDays} d) + perioden + buffer (${s.safetyDays} d), minus det som er på lager. Varer som har gått tomme får +${s.stockoutBoost} % ekstra.</p>
+        <p class="muted small">Forslaget dekker leveringstid (${s.leadDays} d) + perioden + buffer (${s.safetyDays} d), minus det som er på lager. Er det registrert <i>når</i> en vare gikk tom, brukes det faktiske forbruket. Ellers får varer som har vært tomme +${s.stockoutBoost} % ekstra.</p>
+        ${closedPeriodsBetween(todayISO(), addDays(todayISO(), s.leadDays + s.intervalDays + s.safetyDays), s)
+          .map((p) => `<p class="small">🏖 ${esc(p.label || 'Stengt')} ${fmtDate(p.from)}–${fmtDate(p.to)} er trukket fra.</p>`)
+          .join('')}
       </div>
       <div class="card flush">${rows || '<p class="pad">Ingen varer ennå.</p>'}</div>
       <div class="sticky-sum">
-        <div><b>${count} varer · ${money(plan.total)}</b> <span class="muted small">${vatLabel()}</span>${fsHtml}</div>
+        <div><b>${count} varer · ${money(plan.total)}</b> <span class="muted small">${vatLabel()}</span>${fsHtml}${budgetHtml}</div>
         <div class="row gap">
           <button class="btn small" data-act="resetAll">Nullstill</button>
           <button class="btn small primary" data-act="copyList">Kopier liste</button>
@@ -285,7 +384,7 @@ const views = {
       <div class="card flush">
         ${
           orders.length
-            ? `<ul class="list big">${orders
+            ? `<ul class="list roomy">${orders
                 .map((o) => {
                   const sum = o.lines.reduce((a, l) => a + l.sum, 0);
                   return `<li><button class="link" data-act="go" data-to="#/ordre/${encodeURIComponent(o.id)}"><b>${fmtDate(o.date)}</b> <span class="muted small">${esc(o.id)} · ${o.lines.length} varer</span></button><span class="num">${money(sum)}</span></li>`;
@@ -316,6 +415,14 @@ const views = {
           <table class="tbl">
           </table>
           ${p.warnings.map((w) => `<p class="warn small">⚠ ${esc(w)}</p>`).join('')}
+          ${(() => {
+            if (!p.date) return '';
+            const ch = priceChanges(state, { id: p.id, date: p.date, lines: p.lines });
+            const up = ch.filter((c) => c.pct > 0);
+            return ch.length
+              ? `<div class="${up.length ? 'warnbox' : ''} pricebox"><b>${up.length ? `⚠ ${up.length} vare(r) er blitt dyrere` : 'Prisendringer'}</b> siden forrige kjøp (over ${state.settings.priceAlertPct} %):${priceChangeList(ch)}</div>`
+              : '';
+          })()}
           ${p.ok ? '<p class="ok small">✓ Summen stemmer med ordretotalen.</p>' : ''}
           ${!p.date ? `<label class="field">Ordredato <input type="date" data-chg="previewDate" value=""></label>` : ''}
           ${exists ? '<p class="warn small">Denne ordren finnes fra før. Lagrer du, blir den erstattet.</p>' : ''}
@@ -363,24 +470,30 @@ const views = {
         </table>
         <p class="muted small">Prisene i tabellen over er ${vatLabel()}.</p>
       </div>
+      ${(() => {
+        const ch = priceChanges(state, o);
+        return ch.length ? `<div class="card"><div class="label">Prisendringer mot forrige kjøp</div>${priceChangeList(ch)}</div>` : '';
+      })()}
       <button class="btn danger" data-act="deleteOrder" data-id="${esc(o.id)}">Slett ordre</button>`;
   },
 
   varer() {
-    const items = Object.values(state.items).sort((a, b) => isPlanned(b) - isPlanned(a) || a.name.localeCompare(b.name, 'nb'));
+    const items = Object.values(state.items).sort(byCategoryThenName);
     return `
       <h1>Varer</h1>
       <input class="search" type="search" placeholder="Søk i varer" data-input="filter">
       <div class="card flush">
-        <ul class="list big" id="itemList">${items
-          .map((it) => {
+        <ul class="list roomy" id="itemList">${withCategoryHeaders(
+          items,
+          (it) => {
             const st = itemStats(state, it.sku);
             const p = lastPrice(state, it.sku);
-            return `<li data-name="${esc((it.name + ' ' + it.sku).toLowerCase())}" class="${it.active === false ? 'inactive' : ''}"><button class="link" data-act="go" data-to="#/vare/${esc(it.sku)}"><b>${esc(it.name)}</b><span class="muted small">${esc(it.sku)} · ${
+            return `<li data-name="${esc((it.name + ' ' + it.sku + ' ' + (it.category || '')).toLowerCase())}" class="${it.active === false ? 'inactive' : ''}"><button class="link" data-act="go" data-to="#/vare/${esc(it.sku)}"><b>${esc(it.name)}</b><span class="muted small">${esc(it.sku)} · ${
               st.effRate != null ? `${fmtNum(perWeek(st.effRate), 1)} ${esc(unitOf(it))}/uke` : 'ukjent forbruk'
             }${it.consumable === false ? ' · utstyr' : ''}${st.boosted ? ' · <span class="danger">går tomt</span>' : ''}</span></button><span class="num">${p != null ? money(p, 2) : ''}</span></li>`;
-          })
-          .join('')}</ul>
+          },
+          (cat) => `<li class="ghead" data-name="">${esc(cat)}</li>`
+        )}</ul>
       </div>
       <details class="card"><summary>Legg til vare manuelt</summary>
         <label class="field">Varenummer <input id="newSku" inputmode="numeric"></label>
@@ -414,7 +527,20 @@ const views = {
         <div class="tile"><div class="label">Siste pris</div><div class="val">${last ? money(last.price, 2) : '–'}</div><div class="sub">${change != null ? `${change >= 0 ? '+' : ''}${fmtNum(change, 1)} % siden ${fmtDate(first.date)}` : vatLabel()}</div></div>
         <div class="tile"><div class="label">Forbruk</div><div class="val">${st.effRate != null ? fmtNum(perWeek(st.effRate), 1) : '–'}</div><div class="sub">${esc(unitOf(it))} per uke ${st.boosted ? '(inkl. påslag)' : ''}</div></div>
         <div class="tile"><div class="label">Lager nå (ca.)</div><div class="val">${st.stockNow != null ? fmtNum(st.stockNow, 1) : '–'}</div><div class="sub">${st.lastCount ? `talt ${fmtDate(st.lastCount.date)}` : 'ikke talt'}</div></div>
-        <div class="tile"><div class="label">Gått tomt</div><div class="val">${st.stockouts}</div><div class="sub">ganger ved telling</div></div>
+        <div class="tile"><div class="label">Gått tomt</div><div class="val">${st.points.filter((x) => x.qty <= 0).length}</div><div class="sub">ganger registrert</div></div>
+      </div>
+      <div class="card">
+        <div class="label">Gikk varen tom?</div>
+        <div class="row gap">
+          <button class="btn" data-act="markEmpty" data-sku="${esc(sku)}" data-date="${todayISO()}">Gikk tomt i dag</button>
+          <button class="btn" data-act="go" data-to="#/tomt">Annen dato…</button>
+        </div>
+        ${(() => {
+          const ev = (state.stockouts || []).filter((e) => e.sku === sku).sort((a, b) => b.date.localeCompare(a.date));
+          return ev.length
+            ? `<ul class="list">${ev.map((e) => `<li><span>Tomt ${fmtDate(e.date)}</span><button class="link small" data-act="unmarkEmpty" data-sku="${esc(sku)}" data-date="${e.date}">angre</button></li>`).join('')}</ul>`
+            : '<p class="muted small">Registrer når varen går tom, så lærer appen det faktiske forbruket.</p>';
+        })()}
       </div>
       ${st.anomalies ? `<div class="card warnbox small">${st.anomalies} telling(er) gir negativt forbruk (mer på lager enn mulig). Sjekk tellingene eller om en ordre mangler. De er holdt utenfor beregningen.</div>` : ''}
       <div class="card">
@@ -426,6 +552,9 @@ const views = {
       <div class="card">
         <div class="label">Innstillinger for varen</div>
         ${f('name', 'Navn')}
+        <label class="field">Kategori <select data-chg="itemField" data-sku="${esc(sku)}" data-field="category">${CATEGORIES.map(
+          (c) => `<option ${c === (it.category || 'Annet') ? 'selected' : ''}>${esc(c)}</option>`
+        ).join('')}</select></label>
         ${f('unit', 'Bestillingsenhet (f.eks. kartong, pakke, stk)')}
         <div class="row gap">
           ${f('perUnit', 'Antall i hver', 'text', 'inputmode="decimal" placeholder="f.eks. 20"')}
@@ -439,9 +568,38 @@ const views = {
       </div>
       ${
         st.intervals.length
-          ? `<div class="card"><div class="label">Forbruk mellom tellinger</div><table class="tbl"><tr><th>Periode</th><th class="num">Inn</th><th class="num">Brukt</th></tr>${st.intervals
-              .map((iv) => `<tr class="${iv.negative ? 'warn' : ''}"><td>${fmtDate(iv.from).slice(0, 5)}–${fmtDate(iv.to).slice(0, 5)}${iv.stockout ? ' <span class="badge danger">tomt</span>' : ''}</td><td class="num">${fmtNum(iv.received)}</td><td class="num">${fmtNum(iv.used, 1)}</td></tr>`)
+          ? `<div class="card"><div class="label">Forbruk mellom tellinger og tom-registreringer</div><table class="tbl"><tr><th>Periode</th><th class="num">Inn</th><th class="num">Brukt</th></tr>${st.intervals
+              .map((iv) => `<tr class="${iv.negative ? 'warn' : ''}"><td>${fmtDate(iv.from).slice(0, 5)}–${fmtDate(iv.to).slice(0, 5)}${iv.stockout ? ` <span class="badge danger">${iv.dated ? 'gikk tomt' : 'tomt ved telling'}</span>` : ''}</td><td class="num">${fmtNum(iv.received)}</td><td class="num">${fmtNum(iv.used, 1)}</td></tr>`)
               .join('')}</table></div>`
+          : ''
+      }`;
+  },
+
+  tomt() {
+    const items = Object.values(state.items).filter(isPlanned).sort(byCategoryThenName);
+    const marked = new Set((state.stockouts || []).filter((e) => e.date === ui.stockoutDate).map((e) => e.sku));
+    const recent = [...(state.stockouts || [])].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 10);
+    return `
+      <h1>Gikk tomt</h1>
+      <div class="card">
+        <label class="field">Dato varen gikk tom <input type="date" data-chg="stockoutDate" value="${ui.stockoutDate}"></label>
+        <p class="muted small">Trykk på varen som gikk tom. Da vet appen hvor fort den faktisk brukes, og neste forslag blir større.</p>
+      </div>
+      <input class="search" type="search" placeholder="Søk i varer" data-input="filter">
+      <div class="card flush"><ul class="list roomy" id="itemList">${withCategoryHeaders(
+        items,
+        (it) => `<li data-name="${esc((it.name + ' ' + it.sku).toLowerCase())}"><span>${esc(it.name)}</span>${
+          marked.has(it.sku)
+            ? `<button class="btn small" data-act="unmarkEmpty" data-sku="${esc(it.sku)}" data-date="${ui.stockoutDate}">✓ Registrert</button>`
+            : `<button class="btn small danger" data-act="markEmpty" data-sku="${esc(it.sku)}" data-date="${ui.stockoutDate}">Tomt</button>`
+        }</li>`,
+        (cat) => `<li class="ghead" data-name="">${esc(cat)}</li>`
+      )}</ul></div>
+      ${
+        recent.length
+          ? `<div class="card"><div class="label">Siste registreringer</div><ul class="list">${recent
+              .map((e) => `<li><span>${esc(state.items[e.sku]?.name || e.sku)} <span class="muted small">${fmtDate(e.date)}</span></span><button class="link small" data-act="unmarkEmpty" data-sku="${esc(e.sku)}" data-date="${e.date}">angre</button></li>`)
+              .join('')}</ul></div>`
           : ''
       }`;
   },
@@ -458,7 +616,30 @@ const views = {
         ${n('safetyDays', 'Buffer (dager)', 'Ekstra lager så dere ikke går tomme hvis noe går fortere enn vanlig.')}
         ${n('stockoutBoost', 'Påslag for varer som har gått tomme (%)', 'Har lageret vært tomt, vet vi ikke hvor mye som egentlig ville blitt brukt.')}
         ${n('freeShippingMin', 'Grense for fri frakt (kr eks. mva)', 'La stå tomt hvis ukjent.')}
+        ${n('priceAlertPct', 'Prisvarsel ved endring over (%)', 'Vises når du limer inn en ordre og på oversikten.')}
         <label class="check"><input type="checkbox" data-chg="showVat" ${s.showVat ? 'checked' : ''}> Vis beløp inkl. mva</label>
+      </div>
+      <div class="card">
+        <div class="label">Budsjett</div>
+        ${n('budgetYear', 'Årsbudsjett for forbruksvarer (kr)', 'La stå tomt hvis dere ikke har budsjett.')}
+        <label class="check"><input type="checkbox" data-chg="budgetIncVat" ${s.budgetIncVat ? 'checked' : ''}> Budsjettet er inkl. mva</label>
+      </div>
+      <div class="card">
+        <div class="label">Stengte perioder</div>
+        <p class="muted small">Ferier og andre dager barnehagen er stengt. Da regnes det ikke med forbruk, og forslag før en ferie blir mindre.</p>
+        ${(s.closedPeriods || [])
+          .map(
+            (p, i) => `<div class="closedrow">
+              <input data-chg="closedEdit" data-i="${i}" data-field="label" value="${esc(p.label || '')}" placeholder="Navn">
+              <div class="row gap"><input type="date" data-chg="closedEdit" data-i="${i}" data-field="from" value="${p.from}"><input type="date" data-chg="closedEdit" data-i="${i}" data-field="to" value="${p.to}"></div>
+              <button class="link small" data-act="deleteClosed" data-i="${i}">Slett</button>
+            </div>`
+          )
+          .join('')}
+        <div class="row gap">
+          <button class="btn small" data-act="addClosed">+ Legg til periode</button>
+          <button class="btn small" data-act="addSummer">+ Sommerferie (juli)</button>
+        </div>
       </div>
       <div class="card">
         <div class="label">Sikkerhetskopi</div>
@@ -488,7 +669,7 @@ function render() {
   const fn = views[r.name] || views.home;
   const scroll = window.scrollY;
   $main().innerHTML = fn(r.param);
-  const tab = { home: 'home', telling: 'telling', bestill: 'bestill', ordrer: 'ordrer', import: 'ordrer', ordre: 'ordrer', varer: 'varer', vare: 'varer' }[r.name];
+  const tab = { home: 'home', telling: 'telling', bestill: 'bestill', ordrer: 'ordrer', import: 'ordrer', ordre: 'ordrer', varer: 'varer', vare: 'varer', tomt: 'home' }[r.name];
   document.querySelectorAll('nav.tabs a').forEach((a) => a.classList.toggle('on', a.dataset.tab === tab));
   if (render._last === location.hash) window.scrollTo(0, scroll);
   else window.scrollTo(0, 0);
@@ -566,6 +747,34 @@ const actions = {
     toast(`Ordre ${id} lagret`);
     location.hash = `#/ordre/${encodeURIComponent(id)}`;
   },
+  markEmpty(el) {
+    const { sku, date } = el.dataset;
+    state.stockouts = (state.stockouts || []).filter((e) => !(e.sku === sku && e.date === date));
+    state.stockouts.push({ sku, date });
+    toast(`Registrert: ${state.items[sku]?.name || sku} gikk tomt ${fmtDate(date)}`);
+    commit();
+  },
+  unmarkEmpty(el) {
+    const { sku, date } = el.dataset;
+    state.stockouts = (state.stockouts || []).filter((e) => !(e.sku === sku && e.date === date));
+    commit();
+  },
+  addClosed() {
+    const t = todayISO();
+    state.settings.closedPeriods = [...(state.settings.closedPeriods || []), { from: t, to: t, label: 'Stengt' }];
+    commit();
+  },
+  addSummer() {
+    const t = todayISO();
+    const y = t.slice(5) > '07-31' ? Number(t.slice(0, 4)) + 1 : Number(t.slice(0, 4));
+    state.settings.closedPeriods = [...(state.settings.closedPeriods || []), { from: `${y}-07-01`, to: `${y}-07-31`, label: `Sommerferie ${y}` }];
+    commit();
+  },
+  deleteClosed(el) {
+    const i = Number(el.dataset.i);
+    state.settings.closedPeriods = (state.settings.closedPeriods || []).filter((_, j) => j !== i);
+    commit();
+  },
   receivedToday(el) {
     const o = state.orders.find((x) => x.id === el.dataset.id);
     if (o) o.receivedDate = todayISO();
@@ -582,7 +791,7 @@ const actions = {
     const name = document.getElementById('newName').value.trim();
     if (!sku || !name) return toast('Fyll inn varenummer og navn');
     if (state.items[sku]) return toast('Varen finnes allerede');
-    state.items[sku] = { sku, name, unit: 'stk', perUnit: null, subUnit: '', minQty: 0, active: true, note: '' };
+    state.items[sku] = newItem(sku, name);
     commit();
   },
   backup() {
@@ -610,6 +819,23 @@ const actions = {
 };
 
 const changes = {
+  stockoutDate(el) {
+    ui.stockoutDate = el.value || todayISO();
+    render();
+  },
+  budgetIncVat(el) {
+    state.settings.budgetIncVat = el.checked;
+    commit();
+  },
+  closedEdit(el) {
+    const list = (state.settings.closedPeriods || []).map((p) => ({ ...p }));
+    const p = list[Number(el.dataset.i)];
+    if (!p) return;
+    p[el.dataset.field] = el.value;
+    if (p.from && p.to && p.to < p.from) p.to = p.from;
+    state.settings.closedPeriods = list; // ny liste, så beregningene oppdateres
+    commit();
+  },
   countDate(el) {
     ui.countDate = el.value || todayISO();
     render();
@@ -670,7 +896,8 @@ const changes = {
   setting(el) {
     const v = parseInput(el.value);
     const f = el.dataset.field;
-    state.settings[f] = Number.isNaN(v) ? (f === 'freeShippingMin' ? null : state.settings[f]) : v;
+    const nullable = ['freeShippingMin', 'budgetYear'];
+    state.settings[f] = Number.isNaN(v) || (nullable.includes(f) && v <= 0) ? (nullable.includes(f) ? null : state.settings[f]) : v;
     commit();
   },
   showVat(el) {
@@ -684,6 +911,7 @@ const changes = {
       const data = JSON.parse(await file.text());
       const before = state.orders.length;
       state = mergeState(state, data);
+      migrateItems();
       ui.importMsg = `Importert. ${state.orders.length - before} nye ordrer, ${state.orders.length} totalt.`;
       commit();
     } catch (e) {
@@ -733,6 +961,7 @@ window.addEventListener('hashchange', render);
 
 async function init() {
   state = normalize(await load());
+  migrateItems();
   requestPersist();
   render();
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {

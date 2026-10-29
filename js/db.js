@@ -7,7 +7,7 @@ const STORE = 'kv';
 const KEY = 'state';
 
 export function emptyState() {
-  return { version: 1, items: {}, orders: [], counts: [], draft: {}, settings: { ...DEFAULT_SETTINGS } };
+  return { version: 1, items: {}, orders: [], counts: [], stockouts: [], draft: {}, settings: { ...DEFAULT_SETTINGS } };
 }
 
 export function normalize(s) {
@@ -18,6 +18,8 @@ export function normalize(s) {
   out.orders = Array.isArray(out.orders) ? out.orders : [];
   out.counts = Array.isArray(out.counts) ? out.counts : [];
   out.draft = out.draft || {};
+  out.stockouts = Array.isArray(out.stockouts) ? out.stockouts : [];
+  out.settings.closedPeriods = Array.isArray(out.settings.closedPeriods) ? out.settings.closedPeriods : [];
   return out;
 }
 
@@ -76,6 +78,9 @@ export function mergeState(current, incoming) {
     const i = out.orders.findIndex((x) => x.id === o.id);
     if (i >= 0) out.orders[i] = o;
     else out.orders.push(o);
+  }
+  for (const e of inc.stockouts) {
+    if (!out.stockouts.some((x) => x.sku === e.sku && x.date === e.date)) out.stockouts.push(e);
   }
   for (const c of inc.counts) {
     const existing = out.counts.find((x) => x.date === c.date);

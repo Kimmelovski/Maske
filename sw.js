@@ -1,9 +1,9 @@
 // Gjør at appen virker uten nett. Henter alltid nyeste versjon når nettet er der,
 // og faller tilbake til lagret kopi ellers.
-const CACHE = 'bestilling-v1';
+const CACHE = 'bestilling-v2';
 const FILES = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest',
-  'js/app.js', 'js/db.js', 'js/calc.js', 'js/parser.js', 'js/charts.js', 'js/util.js',
+  'js/app.js', 'js/db.js', 'js/calc.js', 'js/parser.js', 'js/charts.js', 'js/util.js', 'js/categories.js',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
 ];
 

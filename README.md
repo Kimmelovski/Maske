@@ -13,14 +13,25 @@ Ta sikkerhetskopi jevnlig fra *Innstillinger*.
 2. **Tell lageret** før hver bestilling under *Telling*. Skriv 0 for tomme varer.
 3. **Se forslaget** under *Bestill*. Velg hvor lenge bestillingen skal vare, juster med − / +, og kopier listen.
 4. **Registrer levering** på ordren («Kom i dag»), så lærer appen den faktiske leveringstiden.
+5. **Noe gikk tomt?** Trykk *Noe gikk tomt?* på oversikten (eller på varen). Da vet appen *når* lageret tok slutt.
+6. **Stengte perioder, budsjett og prisvarsel** settes under ⚙ *Innstillinger*.
+
+## Statistikk
+
+- Kostnad per måned og per kategori (kategori foreslås ut fra varenavnet og kan endres på varen).
+- Prisutvikling per vare, og prisvarsel når en vare er blitt dyrere enn forrige gang (standard 5 %).
+- Budsjett: brukt hittil i år, hvor langt ut i året vi er, og forventet årsforbruk med samme tempo.
 
 ## Slik regnes forslaget ut
 
 - **Forbruk** mellom to tellinger = forrige telling + det som ble levert − ny telling.
   Har dere ikke talt ennå, anslås forbruket fra bestillingene (merket «grovt anslag»).
 - **Anbefalt antall** = forbruk × (leveringstid + periode + buffer) − lager nå − det som er på vei.
-- **Varer som har gått tomme** får et påslag (standard 25 %). Når lageret er tomt, vet vi ikke hvor mye
-  som egentlig ville blitt brukt, så historikken viser for lavt forbruk.
+- **«Gikk tomt» med dato** regnes som en telling på 0 den dagen. Forbruket måles da over de dagene
+  varen faktisk varte, og perioden der lageret stod tomt telles ikke med.
+- **Varer som var tomme ved telling, uten at vi vet når**, får et påslag (standard 25 %), fordi
+  historikken da viser for lavt forbruk.
+- **Stengte perioder** (ferie) teller ikke som forbruksdager, verken i målingen eller i forslaget.
 - **Neste bestilling** er datoen da første vare når bufferen.
 - **Hvor ofte bør dere bestille:** viser hva en bestilling vil koste ved ulike intervaller.
   Er grensen for fri frakt fylt inn, anbefales den hyppigste rytmen som når grensen.
@@ -35,6 +46,7 @@ index.html, css/, js/
   js/calc.js     forbruk, lager og forslag
   js/db.js       lagring i IndexedDB, import/eksport
   js/charts.js   enkle SVG-diagrammer
+  js/categories.js  kategorier og automatisk forslag
   js/app.js      visningene
 ```
 
