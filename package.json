@@ -1,0 +1,10 @@
+{
+  "name": "maske-bestilling",
+  "private": true,
+  "type": "module",
+  "description": "Bestillingshjelp for varer fra Maske.no – kjører lokalt på mobilen",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "start": "python3 -m http.server 8080"
+  }
+}
