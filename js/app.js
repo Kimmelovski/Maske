@@ -14,13 +14,15 @@ import {
   budgetStatus,
   spendByCategory,
   closedPeriodsBetween,
+  orderFrequency,
+  frequencyTier,
 } from './calc.js';
 import { CATEGORIES, guessCategory } from './categories.js';
 import { barChart, lineChart } from './charts.js';
 import { esc, fmtDate, fmtKr, fmtNum, todayISO, daysBetween, monthLabel, parseInput, addDays, round2 } from './util.js';
 
 let state = emptyState();
-const ui = { countDate: todayISO(), stockoutDate: todayISO(), preview: null, pasteText: '', importMsg: '' };
+const ui = { showRare: false, showZero: false, countDate: todayISO(), stockoutDate: todayISO(), preview: null, pasteText: '', importMsg: '' };
 const $main = () => document.getElementById('main');
 
 // ---------- Hjelpere ----------
@@ -267,47 +269,83 @@ const views = {
   },
 
   telling() {
-    const items = Object.values(state.items).filter(isPlanned).sort(byCategoryThenName);
+    const all = Object.values(state.items).filter(isPlanned);
     const count = state.counts.find((c) => c.date === ui.countDate);
     const entries = count?.entries || {};
-    const done = items.filter((i) => entries[i.sku] != null).length;
-    if (!items.length) return `<h1>Telling</h1><div class="card">Ingen varer ennå. Legg inn en ordre først.</div>`;
-    const rows = withCategoryHeaders(
-      items,
-      (it) => {
-        const st = itemStats(state, it.sku);
-        const prev = st.counts.filter((c) => c.date < ui.countDate).pop();
-        const v = entries[it.sku];
-        let inputs;
-        if (it.perUnit && it.subUnit) {
-          const whole = v != null ? Math.floor(v + 1e-9) : '';
-          const rest = v != null ? Math.round((v - whole) * it.perUnit) : '';
-          inputs = `
-            <label class="cnt"><input inputmode="decimal" data-chg="count" data-sku="${esc(it.sku)}" data-part="whole" value="${whole}" placeholder="0"><span>${esc(unitOf(it))}</span></label>
-            <label class="cnt"><input inputmode="numeric" data-chg="count" data-sku="${esc(it.sku)}" data-part="rest" value="${rest}" placeholder="0"><span>${esc(it.subUnit)}</span></label>`;
-        } else {
-          inputs = `<label class="cnt"><input inputmode="decimal" data-chg="count" data-sku="${esc(it.sku)}" data-part="whole" value="${v != null ? String(v).replace('.', ',') : ''}" placeholder="–"><span>${esc(unitOf(it))}</span></label>`;
-        }
-        return `
-          <div class="crow ${v != null ? 'done' : ''}" data-row="${esc(it.sku)}">
-            <div class="cname"><b>${esc(it.name)}</b>
-              <div class="muted small">${esc(it.sku)} · forrige: ${prev ? `${qtyText(it, prev.qty)} (${fmtDate(prev.date)})` : 'ikke talt'}</div>
-            </div>
-            <div class="cinputs">${inputs}</div>
-          </div>`;
-      },
-      (cat) => `<div class="ghead">${esc(cat)}</div>`
-    );
+    if (!all.length) return `<h1>Telling</h1><div class="card">Ingen varer ennå. Legg inn en ordre først.</div>`;
+    const freq = orderFrequency(state);
+    const n = (it) => freq.bySku[it.sku]?.count || 0;
+    const sortMode = state.settings.countSort || 'hyppighet';
+
+    const row = (it, core) => {
+      const st = itemStats(state, it.sku);
+      const prev = st.counts.filter((c) => c.date < ui.countDate).pop();
+      const v = entries[it.sku];
+      let inputs;
+      if (it.perUnit && it.subUnit) {
+        const whole = v != null ? Math.floor(v + 1e-9) : '';
+        const rest = v != null ? Math.round((v - whole) * it.perUnit) : '';
+        inputs = `
+          <label class="cnt"><input inputmode="decimal" data-chg="count" data-sku="${esc(it.sku)}" data-part="whole" value="${whole}" placeholder="0"><span>${esc(unitOf(it))}</span></label>
+          <label class="cnt"><input inputmode="numeric" data-chg="count" data-sku="${esc(it.sku)}" data-part="rest" value="${rest}" placeholder="0"><span>${esc(it.subUnit)}</span></label>`;
+      } else {
+        inputs = `<label class="cnt"><input inputmode="decimal" data-chg="count" data-sku="${esc(it.sku)}" data-part="whole" value="${v != null ? String(v).replace('.', ',') : ''}" placeholder="–"><span>${esc(unitOf(it))}</span></label>`;
+      }
+      return `
+        <div class="crow ${v != null ? 'done' : ''}" data-row="${esc(it.sku)}" ${core ? 'data-core' : ''}>
+          <div class="cname"><b>${esc(it.name)}</b>
+            <div class="muted small">i ${n(it)} av ${freq.total} ordrer · forrige telling: ${prev ? `${qtyText(it, prev.qty)} (${fmtDate(prev.date)})` : 'ingen'}</div>
+          </div>
+          <div class="cinputs">${inputs}</div>
+        </div>`;
+    };
+
+    let body;
+    let core;
+    if (sortMode === 'kategori') {
+      const items = [...all].sort(byCategoryThenName);
+      core = items;
+      body = `<div class="card flush">${withCategoryHeaders(items, (it) => row(it, true), (cat) => `<div class="ghead">${esc(cat)}</div>`)}</div>`;
+    } else {
+      const byFreq = (a, b) => n(b) - n(a) || a.name.localeCompare(b.name, 'nb');
+      const tiers = { fast: [], avogtil: [], sjelden: [] };
+      for (const it of all) tiers[frequencyTier(freq, it.sku)].push(it);
+      Object.values(tiers).forEach((t) => t.sort(byFreq));
+      core = [...tiers.fast, ...tiers.avogtil];
+      // Sjeldne varer som allerede er talt i dag vises alltid, så du ser hva du har skrevet.
+      const rareShown = ui.showRare ? tiers.sjelden : tiers.sjelden.filter((it) => entries[it.sku] != null);
+      const group = (title, help, items, isCore) =>
+        items.length ? `<div class="ghead">${title}<span class="ghelp">${help}</span></div>${items.map((it) => row(it, isCore)).join('')}` : '';
+      body = `
+        <div class="card flush">
+          ${group('Bestilles nesten hver gang', `${tiers.fast.length} varer`, tiers.fast, true)}
+          ${group('Bestilles av og til', `${tiers.avogtil.length} varer`, tiers.avogtil, true)}
+          ${!core.length ? '<p class="pad muted small">Ingen varer er bestilt mer enn én gang ennå.</p>' : ''}
+        </div>
+        ${
+          tiers.sjelden.length
+            ? `<div class="card flush">
+                ${rareShown.length ? `<div class="ghead">Bestilt én gang<span class="ghelp">trenger ikke telles</span></div>${rareShown.map((it) => row(it, false)).join('')}` : ''}
+                <button class="btn block flat" data-act="toggleRare">${ui.showRare ? 'Skjul sjeldne varer' : `Vis ${tiers.sjelden.length} varer som er bestilt bare én gang`}</button>
+              </div>`
+            : ''
+        }`;
+    }
+    const done = core.filter((i) => entries[i.sku] != null).length;
+    const total = Math.max(1, core.length);
     return `
       <h1>Telling</h1>
       <div class="card">
         <label class="field">Dato for telling <input type="date" data-chg="countDate" value="${ui.countDate}"></label>
+        <div class="chips">
+          <button class="chip ${sortMode === 'hyppighet' ? 'on' : ''}" data-act="countSort" data-mode="hyppighet">Etter hvor ofte</button>
+          <button class="chip ${sortMode === 'kategori' ? 'on' : ''}" data-act="countSort" data-mode="kategori">Etter kategori</button>
+        </div>
         <p class="muted small">Tell før du bestiller. Skriv <b>0</b> hvis varen er tom, og la feltet stå tomt hvis du ikke har talt den. Alt lagres med en gang.</p>
-        <p class="muted small">Vil du telle løse pakker i en kartong? Åpne varen under <b>Varer</b> og fyll inn hvor mange det er i hver.</p>
-        <div class="progress"><div style="width:${(done / items.length) * 100}%"></div></div>
-        <div class="small muted" id="countProgress">${done} av ${items.length} varer talt</div>
+        <div class="progress"><div style="width:${(done / total) * 100}%"></div></div>
+        <div class="small muted" id="countProgress">${done} av ${core.length} varer talt</div>
       </div>
-      <div class="card flush">${rows}</div>
+      ${body}
       <button class="btn primary block" data-act="go" data-to="#/bestill">Ferdig – se bestillingsforslag</button>`;
   },
 
@@ -317,12 +355,12 @@ const views = {
     const chips = [7, 14, 21, 28, 42]
       .map((d) => `<button class="chip ${s.intervalDays === d ? 'on' : ''}" data-act="interval" data-days="${d}">${d / 7} ${d === 7 ? 'uke' : 'uker'}</button>`)
       .join('');
-    const rows = plan.rows
-      .map((r) => {
+    const rowHtml = (r) => {
         const { item: it, stats: st, rec } = r;
         const badges = [];
         if (rec.reason === 'ikke-talt') badges.push('<span class="badge warn">tell først</span>');
         if (rec.reason === 'ingen-data') badges.push('<span class="badge muted">ingen data</span>');
+        if (rec.reason === 'sjelden') badges.push('<span class="badge muted">kjøpt én gang</span>');
         if (st.boosted) badges.push(`<span class="badge danger">har gått tomt, +${s.stockoutBoost} %</span>`);
         else if (st.stockoutEvents) badges.push(`<span class="badge danger">gikk tomt ${st.stockoutEvents}×</span>`);
         const info = [];
@@ -345,8 +383,13 @@ const views = {
               <div class="muted small cost">${r.price != null ? money(r.cost) : ''}</div>
             </div>
           </div>`;
-      })
-      .join('');
+    };
+    const zero = plan.rows.filter((r) => r.qty <= 0);
+    const rows =
+      plan.rows.filter((r) => r.qty > 0).map(rowHtml).join('') +
+      (zero.length
+        ? `${ui.showZero ? zero.map(rowHtml).join('') : ''}<button class="btn block flat" data-act="toggleZero">${ui.showZero ? 'Skjul varer uten forslag' : `Vis ${zero.length} varer uten forslag`}</button>`
+        : '');
     const count = plan.rows.filter((r) => r.qty > 0).length;
     const budget = budgetStatus(state);
     const budgetHtml = budget
@@ -747,6 +790,18 @@ const actions = {
     toast(`Ordre ${id} lagret`);
     location.hash = `#/ordre/${encodeURIComponent(id)}`;
   },
+  toggleZero() {
+    ui.showZero = !ui.showZero;
+    render();
+  },
+  toggleRare() {
+    ui.showRare = !ui.showRare;
+    render();
+  },
+  countSort(el) {
+    state.settings.countSort = el.dataset.mode;
+    commit();
+  },
   markEmpty(el) {
     const { sku, date } = el.dataset;
     state.stockouts = (state.stockouts || []).filter((e) => !(e.sku === sku && e.date === date));
@@ -857,12 +912,12 @@ const changes = {
     if (!Object.keys(c.entries).length) state.counts = state.counts.filter((x) => x !== c);
     // Ingen full omtegning her, så fokus blir stående i neste felt.
     row.classList.toggle('done', c.entries[sku] != null);
-    const items = Object.values(state.items).filter(isPlanned);
-    const done = items.filter((i) => c.entries[i.sku] != null).length;
+    const coreRows = [...document.querySelectorAll('[data-row][data-core]')];
+    const done = coreRows.filter((r) => r.classList.contains('done')).length;
     const p = document.getElementById('countProgress');
-    if (p) p.textContent = `${done} av ${items.length} varer talt`;
+    if (p) p.textContent = `${done} av ${coreRows.length} varer talt`;
     const bar = document.querySelector('.progress div');
-    if (bar) bar.style.width = `${(done / items.length) * 100}%`;
+    if (bar) bar.style.width = `${(done / Math.max(1, coreRows.length)) * 100}%`;
     persist();
   },
   previewDate(el) {

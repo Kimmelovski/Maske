@@ -245,6 +245,8 @@ export function recommendQty(stats, item, settings, intervalDays = settings.inte
   const cover = openDays(today, addDays(today, settings.leadDays + intervalDays + settings.safetyDays), settings);
   const target = stats.effRate * cover;
   if (stats.stockNow == null) {
+    // Kjøpt bare én gang og ikke talt: vi vet ikke om varen trengs igjen, så ikke foreslå noe.
+    if (stats.source === 'antatt') return { qty: min, reason: 'sjelden', target };
     // Ikke talt: foreslå én periodes forbruk, men marker at varen bør telles.
     const period = openDays(today, addDays(today, intervalDays), settings);
     return { qty: Math.max(min, Math.ceil(stats.effRate * period - 0.15)), reason: 'ikke-talt', target };
@@ -330,6 +332,31 @@ export function monthlySpend(state) {
     map.set(ym, (map.get(ym) || 0) + sum);
   }
   return map;
+}
+
+// ---------- Hvor ofte varen bestilles ----------
+// Teller hvor mange av ordrene (innenfor historikken) varen var med i.
+export function orderFrequency(state, today = todayISO()) {
+  const fromDate = addDays(today, -state.settings.historyDays);
+  const orders = state.orders.filter((o) => o.date >= fromDate);
+  const bySku = {};
+  for (const o of orders) {
+    for (const sku of new Set(o.lines.map((l) => l.sku))) {
+      const f = (bySku[sku] = bySku[sku] || { count: 0, last: null });
+      f.count++;
+      if (!f.last || o.date > f.last) f.last = o.date;
+    }
+  }
+  return { total: orders.length, bySku };
+}
+
+// fast: med i minst halvparten av ordrene · avogtil: mer enn én gang · sjelden: én gang eller aldri
+export function frequencyTier(freq, sku) {
+  const f = freq.bySku[sku];
+  const n = f ? f.count : 0;
+  if (n >= 2 && n / Math.max(1, freq.total) >= 0.5) return 'fast';
+  if (n >= 2) return 'avogtil';
+  return 'sjelden';
 }
 
 // ---------- Prisvarsel ----------

@@ -150,3 +150,32 @@ test('budsjett og kategorier', () => {
   assert.equal(guessCategory('Kopipapir MultiLaser A4 80g'), 'Kontor');
   assert.equal(guessCategory('Noe helt annet'), 'Annet');
 });
+
+test('hyppighet: fast, av og til, sjelden', async () => {
+  const { orderFrequency, frequencyTier } = await import('../js/calc.js');
+  const l = (sku) => ({ sku, name: sku, price: 10, qty: 1, sum: 10 });
+  const s = base({
+    orders: [
+      { id: 'a', date: '2026-08-01', lines: [l('A'), l('B')] },
+      { id: 'b', date: '2026-09-01', lines: [l('A')] },
+      { id: 'c', date: '2026-10-01', lines: [l('A'), l('C')] },
+      { id: 'd', date: '2026-10-20', lines: [l('B')] },
+      { id: 'e', date: '2026-10-25', lines: [l('D')] },
+    ],
+  });
+  const f = orderFrequency(s, '2026-11-01');
+  assert.equal(f.total, 5);
+  assert.equal(frequencyTier(f, 'A'), 'fast'); // 3 av 5
+  assert.equal(frequencyTier(f, 'B'), 'avogtil'); // 2 av 5
+  assert.equal(frequencyTier(f, 'C'), 'sjelden');
+  assert.equal(frequencyTier(f, 'X'), 'sjelden');
+});
+
+test('vare kjøpt én gang og ikke talt foreslås ikke', () => {
+  const s = base({ orders: [order('a', '2026-10-01', 2)] });
+  const st = itemStats(s, '1', '2026-10-20');
+  assert.equal(st.source, 'antatt');
+  const rec = recommendQty(st, item, s.settings, 21, '2026-10-20');
+  assert.equal(rec.qty, 0);
+  assert.equal(rec.reason, 'sjelden');
+});
