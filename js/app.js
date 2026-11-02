@@ -22,7 +22,7 @@ import { barChart, lineChart } from './charts.js';
 import { esc, fmtDate, fmtKr, fmtNum, todayISO, daysBetween, monthLabel, parseInput, addDays, round2 } from './util.js';
 
 let state = emptyState();
-const ui = { showRare: false, showZero: false, countDate: todayISO(), stockoutDate: todayISO(), preview: null, pasteText: '', importMsg: '' };
+const ui = { showExcluded: false, showRare: false, showZero: false, countDate: todayISO(), stockoutDate: todayISO(), preview: null, pasteText: '', importMsg: '' };
 const $main = () => document.getElementById('main');
 
 // ---------- Hjelpere ----------
@@ -277,7 +277,7 @@ const views = {
     const n = (it) => freq.bySku[it.sku]?.count || 0;
     const sortMode = state.settings.countSort || 'hyppighet';
 
-    const row = (it, core) => {
+    const row = (it, core, hide = false) => {
       const st = itemStats(state, it.sku);
       const prev = st.counts.filter((c) => c.date < ui.countDate).pop();
       const v = entries[it.sku];
@@ -292,7 +292,7 @@ const views = {
         inputs = `<label class="cnt"><input inputmode="decimal" data-chg="count" data-sku="${esc(it.sku)}" data-part="whole" value="${v != null ? String(v).replace('.', ',') : ''}" placeholder="–"><span>${esc(unitOf(it))}</span></label>`;
       }
       return `
-        <div class="crow ${v != null ? 'done' : ''}" data-row="${esc(it.sku)}" ${core ? 'data-core' : ''}>
+        <div class="crow ${v != null ? 'done' : ''}" data-row="${esc(it.sku)}" data-name="${esc((it.name + ' ' + it.sku).toLowerCase())}" ${core ? 'data-core' : ''} ${hide ? 'hidden data-hide' : ''}>
           <div class="cname"><b>${esc(it.name)}</b>
             <div class="muted small">i ${n(it)} av ${freq.total} ordrer · forrige telling: ${prev ? `${qtyText(it, prev.qty)} (${fmtDate(prev.date)})` : 'ingen'}</div>
           </div>
@@ -313,7 +313,8 @@ const views = {
       Object.values(tiers).forEach((t) => t.sort(byFreq));
       core = [...tiers.fast, ...tiers.avogtil];
       // Sjeldne varer som allerede er talt i dag vises alltid, så du ser hva du har skrevet.
-      const rareShown = ui.showRare ? tiers.sjelden : tiers.sjelden.filter((it) => entries[it.sku] != null);
+      // De andre ligger skjult, men søket finner dem.
+      const rareHidden = (it) => !ui.showRare && entries[it.sku] == null;
       const group = (title, help, items, isCore) =>
         items.length ? `<div class="ghead">${title}<span class="ghelp">${help}</span></div>${items.map((it) => row(it, isCore)).join('')}` : '';
       body = `
@@ -325,12 +326,29 @@ const views = {
         ${
           tiers.sjelden.length
             ? `<div class="card flush">
-                ${rareShown.length ? `<div class="ghead">Bestilt én gang<span class="ghelp">trenger ikke telles</span></div>${rareShown.map((it) => row(it, false)).join('')}` : ''}
+                <div class="ghead" ${tiers.sjelden.every(rareHidden) ? 'hidden data-hide' : ''}>Bestilt én gang<span class="ghelp">trenger ikke telles</span></div>${tiers.sjelden.map((it) => row(it, false, rareHidden(it))).join('')}
                 <button class="btn block flat" data-act="toggleRare">${ui.showRare ? 'Skjul sjeldne varer' : `Vis ${tiers.sjelden.length} varer som er bestilt bare én gang`}</button>
               </div>`
             : ''
         }`;
     }
+    // Varer som er merket som utstyr eller inaktive telles ikke. Vis dem, så ingen vare «forsvinner».
+    const excluded = Object.values(state.items)
+      .filter((it) => !isPlanned(it))
+      .sort((a, b) => a.name.localeCompare(b.name, 'nb'));
+    const excludedHtml = excluded.length
+      ? `<div class="card flush">
+          ${excluded
+            .map(
+              (it) => `<div class="crow xrow" data-name="${esc((it.name + ' ' + it.sku).toLowerCase())}" ${ui.showExcluded ? '' : 'hidden data-hide'}>
+                <div class="cname">${esc(it.name)}<div class="muted small">${it.active === false ? 'inaktiv' : 'merket som utstyr'} · i ${n(it)} av ${freq.total} ordrer</div></div>
+                <button class="btn small" data-act="go" data-to="#/vare/${esc(it.sku)}">Endre</button>
+              </div>`
+            )
+            .join('')}
+          <button class="btn block flat" data-act="toggleExcluded">${ui.showExcluded ? 'Skjul' : 'Vis'} ${excluded.length} varer som ikke telles (utstyr eller inaktive)</button>
+        </div>`
+      : '';
     const done = core.filter((i) => entries[i.sku] != null).length;
     const total = Math.max(1, core.length);
     return `
@@ -345,7 +363,9 @@ const views = {
         <div class="progress"><div style="width:${(done / total) * 100}%"></div></div>
         <div class="small muted" id="countProgress">${done} av ${core.length} varer talt</div>
       </div>
+      <input class="search" type="search" placeholder="Finner du ikke varen? Søk her" data-input="countFilter">
       ${body}
+      ${excludedHtml}
       <button class="btn primary block" data-act="go" data-to="#/bestill">Ferdig – se bestillingsforslag</button>`;
   },
 
@@ -605,6 +625,11 @@ const views = {
         </div>
         ${f('minQty', 'Bestill alltid minst', 'text', 'inputmode="decimal"')}
         ${f('note', 'Notat')}
+        <p class="small ${isPlanned(it) ? 'ok' : 'warn'}">${
+          isPlanned(it)
+            ? '✓ Varen er med i telling og bestillingsforslag.'
+            : `⚠ Varen er <b>ikke</b> med i telling og bestillingsforslag, fordi den er merket som ${it.active === false ? 'inaktiv' : 'utstyr'}. Kryss av under for å ta den med.`
+        }</p>
         <label class="check"><input type="checkbox" data-chg="itemFlag" data-flag="consumable" data-sku="${esc(sku)}" ${it.consumable !== false ? 'checked' : ''}> Forbruksvare (brukes opp og bestilles jevnlig)</label>
         <p class="muted small">Ta bort haken for utstyr og engangskjøp, f.eks. pedalbøtte eller musematte. De holdes da utenfor telling og forslag, men vises fortsatt i statistikken.</p>
         <label class="check"><input type="checkbox" data-chg="itemFlag" data-flag="active" data-sku="${esc(sku)}" ${it.active !== false ? 'checked' : ''}> Aktiv (fjern haken hvis dere har sluttet å kjøpe varen)</label>
@@ -792,6 +817,10 @@ const actions = {
   },
   toggleZero() {
     ui.showZero = !ui.showZero;
+    render();
+  },
+  toggleExcluded() {
+    ui.showExcluded = !ui.showExcluded;
     render();
   },
   toggleRare() {
@@ -988,6 +1017,15 @@ document.addEventListener('change', (e) => {
   if (el && changes[el.dataset.chg]) changes[el.dataset.chg](el, e);
 });
 document.addEventListener('input', (e) => {
+  if (e.target.dataset.input === 'countFilter') {
+    // Søk i hele tellingen, også skjulte varer. Tomt søk gir tilbake vanlig visning.
+    const q = e.target.value.toLowerCase().trim();
+    document.querySelectorAll('[data-row], .xrow').forEach((r) => {
+      r.hidden = q ? !r.dataset.name.includes(q) : r.hasAttribute('data-hide');
+    });
+    document.querySelectorAll('.ghead').forEach((h) => (h.hidden = q ? true : h.hasAttribute('data-hide')));
+    return;
+  }
   if (e.target.dataset.input === 'filter') {
     const q = e.target.value.toLowerCase().trim();
     document.querySelectorAll('#itemList li').forEach((li) => (li.hidden = q && !li.dataset.name.includes(q)));
